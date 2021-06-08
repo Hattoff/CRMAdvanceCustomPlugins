@@ -107,7 +107,7 @@ namespace CRMAdvanceCustomPlugins
             }
 
             
-            if(Regex.IsMatch(oldString, @"<\s*p\s|<\s*body\s|<\s*html\s|<\s*span\s|<\s*div\s|<\s*br\s"))
+            if(Regex.IsMatch(oldString, @"<\s*\\?p\s*>?|<\s*\\?body\s*>?|<\s*\\?html\s*>?|<\s*\\?span\s*>?|<\s*\\?div\s*>?|<\s*\\?br\s*>?"))
             {
                 hasHTML = true;
             }
