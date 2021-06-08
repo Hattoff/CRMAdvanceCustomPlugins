@@ -1,6 +1,7 @@
 ﻿using System;
 using Microsoft.Xrm.Sdk;
 using System.Text.RegularExpressions;
+using HtmlAgilityPack;
 
 namespace CRMAdvanceCustomPlugins
 {
@@ -63,18 +64,12 @@ namespace CRMAdvanceCustomPlugins
                         try
                         {
                             String oldSubject = e.GetAttributeValue<string>("subject");
-                            if (oldSubject != null && HasHTML(oldSubject) == true)
-                            {
-                                String newSubject = RemoveHTML(oldSubject);
-                                e["subject"] = newSubject;
-                            }
+                            String newSubject = RemoveHTML(oldSubject);
+                            e["subject"] = newSubject;
 
                             String oldDescription = e.GetAttributeValue<string>("description");
-                            if (oldDescription != null && HasHTML(oldDescription) == true)
-                            {
-                                String newDescription = RemoveHTML(oldDescription);
-                                e["description"] = newDescription;
-                            }
+                            String newDescription = RemoveHTML(oldDescription);
+                            e["description"] = newDescription;
                         }
                         catch (Exception ex)
                         {
@@ -117,14 +112,38 @@ namespace CRMAdvanceCustomPlugins
 
         private String RemoveHTML(String oldString)
         {
-            if(oldString == null)
+            if(HasHTML(oldString) == false)
             {
-                return null;
+                return oldString;
             }
 
+            // In case the HTML parser doesn't work or the tags are malformed...
             // Replace anything between < angle brackets > with nothing. This is a shotgun approach which removes absolutely everything between
             // opened and closed brackets. If you need something with more finesse you can add it here.
-            String newString = Regex.Replace(oldString, @"<.*?>", String.Empty, RegexOptions.Multiline | RegexOptions.Singleline);
+            Regex rgxRemoveTags = new Regex(@"<.*?>", RegexOptions.Multiline | RegexOptions.Singleline);
+
+            HtmlDocument htmlDoc = new HtmlDocument();
+            String newString = "";
+
+            try
+            {
+                htmlDoc.LoadHtml(oldString);
+                foreach (HtmlNode node in htmlDoc.DocumentNode.SelectNodes("//text()"))
+                {
+                    newString += node.InnerText;
+                }
+            }
+            catch
+            {
+                // If the parser fails, try with regex.
+                newString = rgxRemoveTags.Replace(oldString, String.Empty);
+            }
+
+            // Double check for remaining malformed tags. If found, use regex to remove.
+            if (HasHTML(newString) == true)
+            {
+                newString = rgxRemoveTags.Replace(newString, String.Empty);
+            }
 
             // Copied emails often have the HTML-safe versions of brackets and ampersands encoded in the email. 
             // This reverts them back to their original values after the HTML tags have been removed.
