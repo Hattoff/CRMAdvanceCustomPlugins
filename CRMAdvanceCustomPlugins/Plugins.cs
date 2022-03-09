@@ -37,8 +37,13 @@ namespace CRMAdvanceCustomPlugins
 #endif
             try
             {
+                if (context.Depth > 1)
+                {
+                    // Prevent recursive calling of this function.
+                    return;
+                }
                 if (context.MessageName != "RetrieveMultiple" || context.Stage != 20 || context.Mode != 0 ||
-                    !context.InputParameters.Contains("Query") || !(context.InputParameters["Query"] is QueryExpression))
+                !context.InputParameters.Contains("Query") || !(context.InputParameters["Query"] is QueryExpression))
                 {
                     tracer.Trace("Not expected context");
                     return;
@@ -51,8 +56,8 @@ namespace CRMAdvanceCustomPlugins
                 if (ReplaceRegardingCondition(query, tracer, serviceProvider, context))
                 {
 #if DEBUG
-                    var fetch2 = ((QueryExpressionToFetchXmlResponse)service.Execute(new QueryExpressionToFetchXmlRequest() { Query = query })).FetchXml;
-                    tracer.Trace($"Query after:\n{fetch2}");
+                    //var fetch2 = ((QueryExpressionToFetchXmlResponse)service.Execute(new QueryExpressionToFetchXmlRequest() { Query = query })).FetchXml;
+                    //tracer.Trace($"Query after:\n{fetch2}");
 #endif
                     context.InputParameters["Query"] = query;
                 }
@@ -95,48 +100,48 @@ namespace CRMAdvanceCustomPlugins
             }
             if (nullCondition == null || regardingCondition == null)
             {
-                tracer.Trace("Missing expected null condition or regardingobjectid condition");
+                tracer.Trace("Missing expected null condition or valid regardingobjectid condition");
                 return false;
             }
             var regardingId = (Guid)regardingCondition.Values[0];
             tracer.Trace($"Found regarding id: {regardingId}");
 
-            
             // Obtain the organization service reference which you will need for web service calls.
             IOrganizationServiceFactory serviceFactory = (IOrganizationServiceFactory)serviceProvider.GetService(typeof(IOrganizationServiceFactory));
 
             // Perform this CRUD operation as the user who initiated this plugin.
             IOrganizationService service = serviceFactory.CreateOrganizationService(context.UserId);
 
-            // Build the fetch query to search for sposues
-            QueryExpression spouseLookup = new QueryExpression("elcn_personalrelationship");
-            string[] spouseLookupColumnSet = {"elcn_person1id","elcn_person2id","elcn_personalrelationshipid" };
-            spouseLookup.ColumnSet = new ColumnSet(spouseLookupColumnSet);
-            FilterExpression spouseFilter = new FilterExpression(LogicalOperator.And);
-            spouseFilter.AddCondition("elcn_person1id", ConditionOperator.Equal, regardingId.ToString());
-            spouseLookup.Criteria.AddFilter(spouseFilter);
 
-            // Make sure the relationship is spousal
-            LinkEntity relationshipTypeLink = new LinkEntity("elcn_personalrelationship", "elcn_personalrelationshiptype", "elcn_relationshiptype1id", "elcn_personalrelationshiptypeid", JoinOperator.Inner);
-            FilterExpression relationshipTypeFilter = new FilterExpression(LogicalOperator.And);
-            relationshipTypeFilter.AddCondition("elcn_isspousal", ConditionOperator.Equal, System.Boolean.TrueString);
-            relationshipTypeLink.LinkCriteria = relationshipTypeFilter;
+            bool isContactEntity = false;
+            bool isAccountEntity = false;
+            // Check to see if this is regarding a Contact entity.
+            QueryExpression isContactLookup = new QueryExpression("contact");
+            string[] isContactLookupColumnSet = { "contactid" };
+            isContactLookup.ColumnSet = new ColumnSet(isContactLookupColumnSet);
+            isContactLookup.Criteria.AddCondition("contactid", ConditionOperator.Equal, regardingId.ToString());
 
-            // Make sure the spousal relationship is current
-            LinkEntity relationshipStatusLink = new LinkEntity("elcn_personalrelationshiptype", "elcn_status", "elcn_relationshipstatusid", "elcn_statusid", JoinOperator.Inner);
-            FilterExpression relationshipStatusFilter = new FilterExpression(LogicalOperator.And);
-            relationshipStatusFilter.AddCondition("elcn_name", ConditionOperator.Equal, "Current");
-            relationshipStatusLink.LinkCriteria = relationshipStatusFilter;
-            relationshipTypeLink.LinkEntities.Add(relationshipStatusLink);
+            EntityCollection foundContact = service.RetrieveMultiple(isContactLookup);
+            if (foundContact.TotalRecordCount > 0)
+            {
+                isContactEntity = true;
+                tracer.Trace("Query regarding Contact entity");
+            }
+            else
+            {
+                // Check to see if this is regarding an Account entity. If neither Contact or Account then don't do supplemental queries.
+                QueryExpression isAccountLookup = new QueryExpression("account");
+                string[] isAccountLookupColumnSet = { "accountid" };
+                isAccountLookup.ColumnSet = new ColumnSet(isAccountLookupColumnSet);
+                isAccountLookup.Criteria.AddCondition("accountid", ConditionOperator.Equal, regardingId.ToString());
 
-            // Add the filters and links to the spouse lookup
-            spouseLookup.LinkEntities.Add(relationshipTypeLink);
-
-            // Build the fetch query to search for child organizations
-            QueryExpression childOrganizationLookup = new QueryExpression("account");
-            string[] childOrganizationLookupColumnSet = { "accountid" };
-            childOrganizationLookup.ColumnSet = new ColumnSet(childOrganizationLookupColumnSet);
-            childOrganizationLookup.Criteria.AddCondition("accountid", ConditionOperator.Under, regardingId.ToString());
+                EntityCollection foundAccount = service.RetrieveMultiple(isAccountLookup);
+                if (foundAccount.TotalRecordCount > 0)
+                {
+                    isAccountEntity = true;
+                    tracer.Trace("Query regarding Account entity");
+                }
+            }
 
             // All additional ids will go into this list
             List<string> lookupIDs = new List<string>();
@@ -147,26 +152,60 @@ namespace CRMAdvanceCustomPlugins
             try
             {
                 // Find and add any current sposue to the lookup list
-                EntityCollection spouse = service.RetrieveMultiple(spouseLookup);
-                foreach (Entity e in spouse.Entities)
+                if (isContactEntity)
                 {
-                    Guid spouseGuid = e.GetAttributeValue<EntityReference>("elcn_person2id").Id;
-                    string spouseGuidString = spouseGuid.ToString();
-                    if (!lookupIDs.Contains(spouseGuidString))
-                    {
-                        lookupIDs.Add(spouseGuidString);
-                    }
-                }
+                    // Build the fetch query to search for sposues
+                    QueryExpression spouseLookup = new QueryExpression("elcn_personalrelationship");
+                    string[] spouseLookupColumnSet = { "elcn_person1id", "elcn_person2id", "elcn_personalrelationshipid" };
+                    spouseLookup.ColumnSet = new ColumnSet(spouseLookupColumnSet);
+                    FilterExpression spouseFilter = new FilterExpression(LogicalOperator.And);
+                    spouseFilter.AddCondition("elcn_person1id", ConditionOperator.Equal, regardingId.ToString());
+                    spouseLookup.Criteria.AddFilter(spouseFilter);
 
-                // Find and add any child organizations to the lookup list
-                EntityCollection childOrganizations = service.RetrieveMultiple(childOrganizationLookup);
-                foreach (Entity o in childOrganizations.Entities)
-                {
-                    Guid childOrginizationGuid = o.Id;
-                    string childOrganizationGuidString = childOrginizationGuid.ToString();
-                    if (!lookupIDs.Contains(childOrganizationGuidString))
+                    // Make sure the relationship is spousal
+                    LinkEntity relationshipTypeLink = new LinkEntity("elcn_personalrelationship", "elcn_personalrelationshiptype", "elcn_relationshiptype1id", "elcn_personalrelationshiptypeid", JoinOperator.Inner);
+                    FilterExpression relationshipTypeFilter = new FilterExpression(LogicalOperator.And);
+                    relationshipTypeFilter.AddCondition("elcn_isspousal", ConditionOperator.Equal, System.Boolean.TrueString);
+                    relationshipTypeLink.LinkCriteria = relationshipTypeFilter;
+
+                    // Make sure the spousal relationship is current
+                    LinkEntity relationshipStatusLink = new LinkEntity("elcn_personalrelationshiptype", "elcn_status", "elcn_relationshipstatusid", "elcn_statusid", JoinOperator.Inner);
+                    FilterExpression relationshipStatusFilter = new FilterExpression(LogicalOperator.And);
+                    relationshipStatusFilter.AddCondition("elcn_name", ConditionOperator.Equal, "Current");
+                    relationshipStatusLink.LinkCriteria = relationshipStatusFilter;
+                    relationshipTypeLink.LinkEntities.Add(relationshipStatusLink);
+
+                    // Add the filters and links to the spouse lookup
+                    spouseLookup.LinkEntities.Add(relationshipTypeLink);
+
+                    EntityCollection spouse = service.RetrieveMultiple(spouseLookup);
+                    foreach (Entity e in spouse.Entities)
                     {
-                        lookupIDs.Add(childOrganizationGuidString);
+                        Guid spouseGuid = e.GetAttributeValue<EntityReference>("elcn_person2id").Id;
+                        string spouseGuidString = spouseGuid.ToString();
+                        if (!lookupIDs.Contains(spouseGuidString))
+                        {
+                            lookupIDs.Add(spouseGuidString);
+                        }
+                    }
+                } else if (isAccountEntity)
+                {
+                    // Build the fetch query to search for child organizations
+                    QueryExpression childOrganizationLookup = new QueryExpression("account");
+                    string[] childOrganizationLookupColumnSet = { "accountid" };
+                    childOrganizationLookup.ColumnSet = new ColumnSet(childOrganizationLookupColumnSet);
+                    childOrganizationLookup.Criteria.AddCondition("accountid", ConditionOperator.Under, regardingId.ToString());
+
+                    // Find and add any child organizations to the lookup list
+                    EntityCollection childOrganizations = service.RetrieveMultiple(childOrganizationLookup);
+                    foreach (Entity o in childOrganizations.Entities)
+                    {
+                        Guid childOrginizationGuid = o.Id;
+                        string childOrganizationGuidString = childOrginizationGuid.ToString();
+                        if (!lookupIDs.Contains(childOrganizationGuidString))
+                        {
+                            lookupIDs.Add(childOrganizationGuidString);
+                        }
                     }
                 }
             }
