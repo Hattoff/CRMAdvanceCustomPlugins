@@ -56,8 +56,8 @@ namespace CRMAdvanceCustomPlugins
                 if (ReplaceRegardingCondition(query, tracer, serviceProvider, context))
                 {
 #if DEBUG
-                    //var fetch2 = ((QueryExpressionToFetchXmlResponse)service.Execute(new QueryExpressionToFetchXmlRequest() { Query = query })).FetchXml;
-                    //tracer.Trace($"Query after:\n{fetch2}");
+                    var fetch2 = ((QueryExpressionToFetchXmlResponse)service.Execute(new QueryExpressionToFetchXmlRequest() { Query = query })).FetchXml;
+                    tracer.Trace($"Query after:\n{fetch2}");
 #endif
                     context.InputParameters["Query"] = query;
                 }
@@ -106,6 +106,7 @@ namespace CRMAdvanceCustomPlugins
                     }
                     if (!regardingConditions.Contains(cond))
                     {
+                        // Cache the regarding entity conditions for removal. After they have been removed, a new regarding entity condition will be added.
                         regardingConditions.Add(cond);
                     }
                 }
